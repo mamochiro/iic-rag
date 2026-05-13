@@ -1,6 +1,5 @@
-from contextlib import asynccontextmanager
 from typing import Annotated
-import asyncio
+import uuid
 
 from fastapi import FastAPI, HTTPException, Security, BackgroundTasks
 from fastapi.security import APIKeyHeader
@@ -9,6 +8,8 @@ from pydantic import BaseModel
 from src.config import settings
 from src.query import answer_question
 from src.ingest import ingest_space, ingest_jira_project, ingest_gitlab
+
+_jobs: dict[str, dict] = {}
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -60,6 +61,7 @@ class IngestGitLabRequest(BaseModel):
 
 class IngestResponse(BaseModel):
     status: str
+    job_id: str
     pages: int
     chunks: int
 
@@ -83,31 +85,68 @@ def query(req: QueryRequest, _: str = Security(_require_key)):
     )
 
 
+def _make_job() -> str:
+    job_id = str(uuid.uuid4())
+    _jobs[job_id] = {"status": "running", "pages": 0, "chunks": 0, "error": None}
+    return job_id
+
+
+def _finish_job(job_id: str, result: dict) -> None:
+    _jobs[job_id] = {"status": "done", **result, "error": None}
+
+
+def _fail_job(job_id: str, exc: Exception) -> None:
+    _jobs[job_id] = {"status": "error", "pages": 0, "chunks": 0, "error": str(exc)}
+
+
 @app.post("/ingest/confluence", response_model=IngestResponse)
 def ingest_confluence(req: IngestConfluenceRequest, background: BackgroundTasks,
                       _: str = Security(_require_key)):
+    job_id = _make_job()
     def run():
-        ingest_space(req.space, limit=req.limit, incremental=req.incremental)
+        try:
+            result = ingest_space(req.space, limit=req.limit, incremental=req.incremental)
+            _finish_job(job_id, result)
+        except Exception as e:
+            _fail_job(job_id, e)
     background.add_task(run)
-    return IngestResponse(status="started", pages=0, chunks=0)
+    return IngestResponse(status="started", job_id=job_id, pages=0, chunks=0)
 
 
 @app.post("/ingest/jira", response_model=IngestResponse)
 def ingest_jira(req: IngestJiraRequest, background: BackgroundTasks,
                 _: str = Security(_require_key)):
+    job_id = _make_job()
     def run():
-        ingest_jira_project(req.project, limit=req.limit, incremental=req.incremental)
+        try:
+            result = ingest_jira_project(req.project, limit=req.limit, incremental=req.incremental)
+            _finish_job(job_id, result)
+        except Exception as e:
+            _fail_job(job_id, e)
     background.add_task(run)
-    return IngestResponse(status="started", pages=0, chunks=0)
+    return IngestResponse(status="started", job_id=job_id, pages=0, chunks=0)
 
 
 @app.post("/ingest/gitlab", response_model=IngestResponse)
 def ingest_gl(req: IngestGitLabRequest, background: BackgroundTasks,
               _: str = Security(_require_key)):
+    job_id = _make_job()
     def run():
-        ingest_gitlab(req.project_id, limit=req.limit, incremental=req.incremental)
+        try:
+            result = ingest_gitlab(req.project_id, limit=req.limit, incremental=req.incremental)
+            _finish_job(job_id, result)
+        except Exception as e:
+            _fail_job(job_id, e)
     background.add_task(run)
-    return IngestResponse(status="started", pages=0, chunks=0)
+    return IngestResponse(status="started", job_id=job_id, pages=0, chunks=0)
+
+
+@app.get("/jobs/{job_id}")
+def job_status(job_id: str, _: str = Security(_require_key)):
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"job_id": job_id, **job}
 
 
 @app.get("/status")

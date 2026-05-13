@@ -12,9 +12,7 @@ console = Console()
 def _run_pipeline(pages, source_label: str) -> dict:
     all_chunks = []
     for p in pages:
-        chunks = chunk_page(p)
-        for c in chunks:
-            c.source_type = source_label
+        chunks = [c.model_copy(update={"source_type": source_label}) for c in chunk_page(p)]
         all_chunks.extend(chunks)
     console.log(f"Produced {len(all_chunks)} chunks")
 

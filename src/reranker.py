@@ -1,7 +1,10 @@
 import json
+import logging
 from openai import OpenAI
 from .config import settings
 from .models import Retrieved
+
+logger = logging.getLogger(__name__)
 
 _client = OpenAI(
     api_key=settings.nvidia_api_key,
@@ -23,24 +26,20 @@ def rerank(question: str, candidates: list[Retrieved], top_k: int) -> list[Retri
         for i, c in enumerate(candidates)
     )
 
-    resp = _client.chat.completions.create(
-        model=settings.nvidia_chat_model,
-        messages=[
-            {"role": "system", "content": _PROMPT},
-            {"role": "user", "content": f"Question: {question}\n\nPassages:\n{passages}"},
-        ],
-        max_tokens=256,
-        temperature=0.0,
-    )
-
-    raw = resp.choices[0].message.content.strip()
-
     try:
-        # Extract JSON array from response (model may wrap it in markdown)
+        resp = _client.chat.completions.create(
+            model=settings.nvidia_chat_model,
+            messages=[
+                {"role": "system", "content": _PROMPT},
+                {"role": "user", "content": f"Question: {question}\n\nPassages:\n{passages}"},
+            ],
+            max_tokens=256,
+            temperature=0.0,
+        )
+        raw = resp.choices[0].message.content.strip()
         start = raw.find("[")
         end = raw.rfind("]") + 1
         indices = json.loads(raw[start:end])
-        # Validate indices and pick top_k
         valid = [i for i in indices if isinstance(i, int) and 0 <= i < len(candidates)]
         if valid:
             return [
@@ -48,7 +47,6 @@ def rerank(question: str, candidates: list[Retrieved], top_k: int) -> list[Retri
                 for rank, i in enumerate(valid[:top_k])
             ]
     except Exception:
-        pass
+        logger.warning("Reranker failed, falling back to original order", exc_info=True)
 
-    # Fallback: return original order
     return candidates[:top_k]

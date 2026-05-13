@@ -22,8 +22,8 @@ def chunk_page(page: Page) -> list[Chunk]:
         if not window:
             break
         content = _enc.decode(window)
-        # Prepend title to each chunk to improve recall on title-matching queries
-        content_with_title = f"{page.title}\n\n{content}"
+        prefix = f"{page.title}\n\n"
+        content_with_title = prefix + content
         chunks.append(Chunk(
             source_id=page.source_id,
             source_url=page.source_url,
@@ -31,7 +31,7 @@ def chunk_page(page: Page) -> list[Chunk]:
             space_key=page.space_key,
             chunk_index=i,
             content=content_with_title,
-            token_count=len(window),
+            token_count=len(window) + len(_enc.encode(prefix)),
         ))
         if start + size >= len(tokens):
             break

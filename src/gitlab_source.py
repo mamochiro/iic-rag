@@ -1,8 +1,11 @@
 import base64
+import logging
 import gitlab
 from datetime import datetime
 from .config import settings
 from .models import Page
+
+logger = logging.getLogger(__name__)
 
 _client = gitlab.Gitlab(settings.gitlab_url, private_token=settings.gitlab_token)
 
@@ -30,7 +33,7 @@ def _fetch_wiki_pages(project, base_url: str) -> list[Page]:
                 content=getattr(full, "content", "") or "",
             ))
     except Exception:
-        pass
+        logger.warning("Failed to fetch wiki pages for project %s", project.id, exc_info=True)
     return pages
 
 
@@ -43,6 +46,7 @@ def _fetch_md_files(project, base_url: str, ref: str = "main") -> list[Page]:
             items = project.repository_tree(recursive=True, ref="master", get_all=True)
             ref = "master"
         except Exception:
+            logger.warning("Could not list repository tree for project %s", project.id, exc_info=True)
             return pages
 
     for item in items:
@@ -62,6 +66,7 @@ def _fetch_md_files(project, base_url: str, ref: str = "main") -> list[Page]:
                 content=content,
             ))
         except Exception:
+            logger.warning("Failed to fetch file %s from project %s", path, project.id, exc_info=True)
             continue
     return pages
 

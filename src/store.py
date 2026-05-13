@@ -1,14 +1,25 @@
-import psycopg
-from datetime import datetime, timezone
+import logging
+from datetime import datetime
+from psycopg_pool import ConnectionPool
 from pgvector.psycopg import register_vector
 from .config import settings
 from .models import EmbeddedChunk, Retrieved
 
+logger = logging.getLogger(__name__)
 
-def _connect():
-    conn = psycopg.connect(settings.database_url, autocommit=False)
-    register_vector(conn)
-    return conn
+_pool: ConnectionPool | None = None
+
+
+def _get_pool() -> ConnectionPool:
+    global _pool
+    if _pool is None:
+        _pool = ConnectionPool(
+            settings.database_url,
+            min_size=2,
+            max_size=10,
+            configure=lambda conn: register_vector(conn),
+        )
+    return _pool
 
 
 def upsert_chunks(chunks: list[EmbeddedChunk]) -> int:
@@ -25,7 +36,7 @@ def upsert_chunks(chunks: list[EmbeddedChunk]) -> int:
             embedding = EXCLUDED.embedding,
             updated_at = NOW();
     """
-    with _connect() as conn, conn.cursor() as cur:
+    with _get_pool().connection() as conn, conn.cursor() as cur:
         cur.executemany(sql, [
             (c.source_type, c.source_id, c.source_url, c.title, c.space_key,
              c.chunk_index, c.content, c.token_count, c.embedding)
@@ -43,7 +54,7 @@ def search(query_embedding: list[float], top_k: int) -> list[Retrieved]:
         ORDER BY embedding <=> %s::vector
         LIMIT %s;
     """
-    with _connect() as conn, conn.cursor() as cur:
+    with _get_pool().connection() as conn, conn.cursor() as cur:
         cur.execute(sql, (query_embedding, query_embedding, top_k))
         rows = cur.fetchall()
     return [
@@ -61,7 +72,7 @@ def bm25_search(query_text: str, top_k: int) -> list[Retrieved]:
         ORDER BY score DESC
         LIMIT %s;
     """
-    with _connect() as conn, conn.cursor() as cur:
+    with _get_pool().connection() as conn, conn.cursor() as cur:
         cur.execute(sql, (query_text, query_text, top_k))
         rows = cur.fetchall()
     return [
@@ -89,15 +100,13 @@ def hybrid_search(query_embedding: list[float], query_text: str, top_k: int) -> 
         scores[r.chunk_id] = scores.get(r.chunk_id, 0) + 1 / (K + rank + 1)
         meta[r.chunk_id] = r
 
-    # Apply curated boost — fetch curated flag for all candidate chunks
     if scores:
         curated_sql = "SELECT id FROM chunks WHERE id = ANY(%s) AND curated = TRUE;"
-        with _connect() as conn, conn.cursor() as cur:
+        with _get_pool().connection() as conn, conn.cursor() as cur:
             cur.execute(curated_sql, (list(scores.keys()),))
             curated_ids = {row[0] for row in cur.fetchall()}
-        BOOST = 0.02
         for cid in curated_ids:
-            scores[cid] += BOOST
+            scores[cid] += 0.02
 
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
     return [Retrieved(**{**meta[cid].model_dump(), "score": score}) for cid, score in ranked]
@@ -105,7 +114,7 @@ def hybrid_search(query_embedding: list[float], query_text: str, top_k: int) -> 
 
 def set_curated(source_url: str, curated: bool) -> int:
     sql = "UPDATE chunks SET curated = %s WHERE source_url = %s;"
-    with _connect() as conn, conn.cursor() as cur:
+    with _get_pool().connection() as conn, conn.cursor() as cur:
         cur.execute(sql, (curated, source_url))
         count = cur.rowcount
         conn.commit()
@@ -118,14 +127,14 @@ def log_query(question: str, rewritten: str, retrieved_urls: list[str],
         INSERT INTO query_log (question, rewritten_question, retrieved_urls, answer, latency_ms)
         VALUES (%s, %s, %s, %s, %s);
     """
-    with _connect() as conn, conn.cursor() as cur:
+    with _get_pool().connection() as conn, conn.cursor() as cur:
         cur.execute(sql, (question, rewritten, retrieved_urls, answer, latency_ms))
         conn.commit()
 
 
 def get_last_synced(source_type: str, source_key: str) -> datetime | None:
     sql = "SELECT last_synced_at FROM sync_log WHERE source_type = %s AND source_key = %s;"
-    with _connect() as conn, conn.cursor() as cur:
+    with _get_pool().connection() as conn, conn.cursor() as cur:
         cur.execute(sql, (source_type, source_key))
         row = cur.fetchone()
     return row[0] if row else None
@@ -140,6 +149,6 @@ def set_last_synced(source_type: str, source_key: str, pages: int, chunks: int) 
             pages_fetched   = EXCLUDED.pages_fetched,
             chunks_upserted = EXCLUDED.chunks_upserted;
     """
-    with _connect() as conn, conn.cursor() as cur:
+    with _get_pool().connection() as conn, conn.cursor() as cur:
         cur.execute(sql, (source_type, source_key, pages, chunks))
         conn.commit()

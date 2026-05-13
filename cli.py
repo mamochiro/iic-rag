@@ -1,10 +1,13 @@
 import typer
+import psycopg
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from src.config import settings
+from src.gitlab_source import list_projects
 from src.ingest import ingest_space, ingest_jira_project, ingest_gitlab
 from src.query import answer_question
-from src.store import get_last_synced, set_curated
+from src.store import set_curated
 
 app = typer.Typer(add_completion=False)
 console = Console()
@@ -48,7 +51,6 @@ def gl_list(
     search: str = typer.Option(None, help="Filter projects by name"),
 ):
     """List accessible GitLab projects and their IDs."""
-    from src.gitlab_source import list_projects
     projects = list_projects(search=search)
     if not projects:
         console.print("No projects found.")
@@ -86,15 +88,10 @@ def sync(
 @app.command()
 def status():
     """Show last sync time for all indexed sources."""
-    from psycopg import connect
-    from dotenv import load_dotenv
-    import os
-    load_dotenv()
-    conn = connect(os.getenv("DATABASE_URL"))
-    cur = conn.cursor()
-    cur.execute("SELECT source_type, source_key, last_synced_at, pages_fetched, chunks_upserted FROM sync_log ORDER BY last_synced_at DESC;")
-    rows = cur.fetchall()
-    conn.close()
+    with psycopg.connect(settings.database_url) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT source_type, source_key, last_synced_at, pages_fetched, chunks_upserted FROM sync_log ORDER BY last_synced_at DESC;")
+        rows = cur.fetchall()
 
     if not rows:
         console.print("No syncs recorded yet.")
@@ -134,18 +131,13 @@ def logs(
     limit: int = typer.Option(10, help="Number of recent queries to show"),
 ):
     """Show recent queries with latency and rewritten form."""
-    from psycopg import connect
-    from dotenv import load_dotenv
-    import os
-    load_dotenv()
-    conn = connect(os.getenv("DATABASE_URL"))
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT created_at, latency_ms, question, rewritten_question
-        FROM query_log ORDER BY created_at DESC LIMIT %s;
-    """, (limit,))
-    rows = cur.fetchall()
-    conn.close()
+    with psycopg.connect(settings.database_url) as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT created_at, latency_ms, question, rewritten_question
+            FROM query_log ORDER BY created_at DESC LIMIT %s;
+        """, (limit,))
+        rows = cur.fetchall()
 
     if not rows:
         console.print("No queries logged yet.")
