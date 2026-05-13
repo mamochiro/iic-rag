@@ -117,7 +117,7 @@ Source (Confluence / Jira / GitLab)
     │
     ▼
 [Store] — upsert into Postgres (ON CONFLICT → update)
-          tsvector trigger fires automatically
+          tsv column is GENERATED ALWAYS AS (auto-maintained)
     │
     ▼
 [sync_log] — records last_synced_at for incremental next run
