@@ -1,0 +1,14 @@
+# Real questions from real Slack threads or hallway conversations.
+# Each one: the question, the ideal answer (key facts only), and the URLs
+# of the Confluence pages that should be cited.
+#
+# Aim for 30-50 entries by end of Phase 2.
+
+- question: "How does our authentication system work?"
+  ideal_answer_keypoints:
+    - "We use OAuth 2.0 with Okta as IdP"
+    - "Sessions stored in Redis with 8-hour TTL"
+  expected_sources:
+    - "https://yourcompany.atlassian.net/wiki/spaces/ENG/pages/12345"
+
+# Add ~20 more before starting Phase 2.
